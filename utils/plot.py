@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt 
 
 data = {}
-with open("../results/k80_train.txt", 'r') as f:
+with open("../results/v100_train.txt", 'r') as f:
     lines = f.readlines() 
     for line in lines:
         tokens = line.split(',')
@@ -15,7 +15,7 @@ with open("../results/k80_train.txt", 'r') as f:
         data[modelname]['train'].append(total_time)
         data[modelname]['bz'].append(bz)
 
-with open("../results/k80_test.txt", 'r') as f:
+with open("../results/v100_test.txt", 'r') as f:
     lines = f.readlines() 
     for line in lines:
         tokens = line.split(',')
@@ -41,6 +41,6 @@ for model in data:
 
 ax1.legend()
 ax2.legend()
-fig.suptitle("K80", fontsize=20)
+fig.suptitle("v100", fontsize=20)
 fig.set_size_inches(10, 5)
-fig.savefig("k80.png")
+fig.savefig("v100.png")
