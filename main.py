@@ -14,9 +14,12 @@ import argparse
 from models import *
 from utils import progress_bar
 
+import time
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+parser.add_argument('--bz', default=64, type=int, help='batch size')
+parser.add_argument('--model', default="res50", type=str, help='Model Name')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 args = parser.parse_args()
@@ -42,33 +45,37 @@ transform_test = transforms.Compose([
 trainset = torchvision.datasets.CIFAR10(
     root='./data', train=True, download=True, transform=transform_train)
 trainloader = torch.utils.data.DataLoader(
-    trainset, batch_size=128, shuffle=True, num_workers=2)
+    trainset, batch_size=args.bz, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(
     root='./data', train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(
-    testset, batch_size=100, shuffle=False, num_workers=2)
+    testset, batch_size=args.bz, shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 print('==> Building model..')
-# net = VGG('VGG19')
-# net = ResNet18()
-# net = PreActResNet18()
-# net = GoogLeNet()
-# net = DenseNet121()
-# net = ResNeXt29_2x64d()
-# net = MobileNet()
-# net = MobileNetV2()
-# net = DPN92()
-# net = ShuffleNetG2()
-# net = SENet18()
-# net = ShuffleNetV2(1)
-# net = EfficientNetB0()
-# net = RegNetX_200MF()
-net = SimpleDLA()
+
+nets = {
+    "res50" : ResNet50(),
+    "res18" : ResNet18(),
+    "mobile" : MobileNet(),
+    "mobile_v2" : MobileNetV2(),
+    "dense" : DenseNet121(),
+
+}
+if args.model == "vgg16":
+    net = VGG('VGG16')
+elif args.model == "vgg19":
+    net = VGG('VGG19')
+elif args.model in nets.keys():
+    net = nets[args.model]
+else:
+    print("Unknown model ", args.model)
+    exit(0)
+
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -87,7 +94,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
-
+bench_iter = 50
 
 # Training
 def train(epoch):
@@ -96,8 +103,11 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
+    compute_time = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
+
+        end = time.time()
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
@@ -108,10 +118,14 @@ def train(epoch):
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
+        
+        compute_time += time.time() - end
+        if batch_idx == bench_iter:
+            break
 
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                     % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
+        # progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        #              % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+    return compute_time
 
 def test(epoch):
     global best_acc
@@ -119,9 +133,12 @@ def test(epoch):
     test_loss = 0
     correct = 0
     total = 0
+    compute_time = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
+            
+            end = time.time()
             outputs = net(inputs)
             loss = criterion(outputs, targets)
 
@@ -130,25 +147,48 @@ def test(epoch):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                         % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+            compute_time += time.time() - end
+            if batch_idx == bench_iter:
+                break
+            # progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+            #              % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
-    # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..')
-        state = {
-            'net': net.state_dict(),
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.pth')
-        best_acc = acc
+    return compute_time
+    # # Save checkpoint.
+    # acc = 100.*correct/total
+    # if acc > best_acc:
+    #     print('Saving..')
+    #     state = {
+    #         'net': net.state_dict(),
+    #         'acc': acc,
+    #         'epoch': epoch,
+    #     }
+    #     if not os.path.isdir('checkpoint'):
+    #         os.mkdir('checkpoint')
+    #     torch.save(state, './checkpoint/ckpt.pth')
+    #     best_acc = acc
 
 
-for epoch in range(start_epoch, start_epoch+200):
-    train(epoch)
-    test(epoch)
-    scheduler.step()
+# for epoch in range(start_epoch, start_epoch+1):
+epoch = 0
+start_train = time.time()
+train_compute_time = train(epoch)
+torch.cuda.synchronize()
+end_train = time.time()
+record = "model %s, batch_size %d, train_compute_tome %f, total_time %f\n" % \
+             (args.model, args.bz, train_compute_time, end_train - start_train)
+with open("train.txt" , 'a') as f:
+    f.write(record)
+print(record)
+
+start_test = time.time()
+test_compute_time = test(epoch)
+torch.cuda.synchronize()
+end_test = time.time()
+record = "model %s, batch_size %d, test_compute_time %f, test_time %f\n" % \
+            (args.model, args.bz, test_compute_time, end_test - start_test)
+with open("test.txt", 'a') as f:
+    f.write(record)
+print(record)
+
+# scheduler.step()
